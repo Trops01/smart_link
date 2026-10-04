@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>System VRP Dyspozytorni</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8F9FA; margin-bottom: 120px; color: #111827; }
+    .leaflet-marker-icon { transition: margin 0.1s linear; }
+    
+    .bg-neon { background-color: #d4ff00; }
+    .text-neon { color: #d4ff00; }
+    .border-neon { border-color: #d4ff00; }
+    .hover-bg-neon:hover { background-color: #c2ed00; }
+    
+    .leaflet-div-icon { background: transparent; border: none; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    .zone-tooltip { background: transparent; border: none; box-shadow: none; color: #ef4444; font-weight: 900; font-size: 14px; text-transform: uppercase; text-shadow: 0px 0px 10px white, 0px 0px 10px white, 0px 0px 10px white; text-align: center; }
+  </style>
+</head>
+<body class="antialiased">
+
+  <!-- Modal Konfiguracji Symulacji -->
+  <div id="sim-modal" class="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-sm hidden items-center justify-center">
+      <div class="bg-white rounded-[36px] p-8 max-w-md w-full shadow-2xl">
+         <h2 class="text-2xl font-black mb-2">Konfiguracja Symulacji</h2>
+         <p class="text-gray-500 text-[13px] font-bold mb-8">Ustaw parametry wirtualnego symulatora środowiska miejskiego.</p>
+         
+         <div class="space-y-6">
+            <div>
+               <label class="block text-[12px] font-extrabold text-gray-400 uppercase tracking-widest mb-2">Liczba Symulowanych Dni</label>
+               <input type="number" id="cfg-days" min="1" max="30" value="3" class="w-full bg-gray-50 border border-gray-200 rounded-full px-5 py-3 font-black text-black outline-none focus:border-black" />
+            </div>
+            <div>
+               <label class="block text-[12px] font-extrabold text-gray-400 uppercase tracking-widest mb-2">Pojemność Autobusu</label>
+               <input type="number" id="cfg-capacity" value="10" class="w-full bg-gray-50 border border-gray-200 rounded-full px-5 py-3 font-black text-black outline-none focus:border-black" />
+            </div>
+            <div>
+               <label class="block text-[12px] font-extrabold text-gray-400 uppercase tracking-widest mb-2">Limit Wielkości Floty (Ilość Busów)</label>
+               <input type="number" id="cfg-fleet" value="50" class="w-full bg-gray-50 border border-gray-200 rounded-full px-5 py-3 font-black text-black outline-none focus:border-black" />
+            </div>
+            <div>
+               <label class="block text-[12px] font-extrabold text-gray-400 uppercase tracking-widest mb-2">Zainteresowanie Pasażerów (Szansa na tick)</label>
+               <div class="flex items-center gap-4">
+                  <input type="range" id="cfg-spawn" min="10" max="100" value="40" class="flex-1 accent-black" oninput="document.getElementById('cfg-spawn-lbl').innerText=this.value+'%'" />
+                  <span id="cfg-spawn-lbl" class="font-black text-black w-12 text-right">40%</span>
+               </div>
+            </div>
+         </div>
+         
+         <div class="flex gap-4 mt-10">
+            <button onclick="document.getElementById('sim-modal').classList.replace('flex', 'hidden')" class="flex-1 py-4 bg-gray-100 hover:bg-gray-200 rounded-full font-extrabold text-gray-500 hover:text-black transition-colors">Anuluj</button>
+            <button onclick="startSimulation()" class="flex-1 py-4 bg-neon hover-bg-neon rounded-full font-black text-black shadow-lg transition-transform hover:scale-105">Uruchom Symulację</button>
+         </div>
+      </div>
+  </div>
+
+  <header class="sticky top-0 z-[5000] px-6 py-4 flex items-center justify-between bg-white/90 backdrop-blur-xl border-b border-gray-100 shadow-sm">
+    <div class="flex items-center gap-3">
+      <div class="w-12 h-12 bg-black rounded-full flex items-center justify-center shadow-lg text-white text-xl">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+      </div>
+      <div>
+         <h1 class="text-[20px] font-extrabold tracking-tight">SmartLink Dispatch</h1>
+         <p class="text-[13px] text-gray-500 font-semibold" id="sim-day-lbl">Baza MDA Kraków</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <button onclick="openSimModal()" id="sim-btn" class="px-5 py-3 rounded-full bg-black text-white text-[14px] font-bold transition-colors flex items-center gap-2 shadow-lg hover:bg-gray-800">
+         🤖 Start Symulatora
+      </button>
+      <button onclick="calculateRoutes()" id="calc-btn" class="px-6 py-3 rounded-full bg-neon hover-bg-neon text-black text-[14px] font-bold shadow-lg transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
+        <span>⚡</span> Oblicz trasy
+      </button>
+      <button onclick="clearBookings()" class="px-5 py-3 rounded-full bg-white border-2 border-gray-200 hover:border-red-500 hover:text-gray-700 text-[14px] font-bold transition-colors">Wyczyść</button>
+    </div>
+  </header>
+
+  <div class="bg-gray-900 text-[#d4ff00] px-8 py-2.5 flex justify-between items-center text-[12px] font-extrabold tracking-wide z-[4000] relative shadow-md">
+      <div class="flex items-center gap-4">
+          <span>🏙️ MPK Kraków: ~961 tys. przejazdów/dzień</span>
+          <span class="opacity-30">|</span>
+          <span>🚐 SmartLink: <span id="stat-passengers" class="text-white bg-black/30 px-2 py-0.5 rounded-md">0</span> pasażerów</span>
+          <span class="opacity-30">|</span>
+          <span class="text-green-400">🌱 Oszczędność CO2: <span id="stat-co2" class="text-white bg-green-500/30 px-2 py-0.5 rounded-md">0</span> kg</span>
+      </div>
+      <div class="flex items-center gap-2">
+          Udział w rynku: <span id="stat-marketshare" class="text-white bg-black/30 px-2 py-0.5 rounded-md">0.0000%</span>
+      </div>
+  </div>
+
+  <main class="max-w-7xl mx-auto px-6 mt-6">
+    <div class="bg-white rounded-[36px] shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-gray-100 mb-10 overflow-hidden relative p-2">
+      <div id="map" class="h-[600px] w-full z-10 rounded-[28px] bg-[#e8e8e8]"></div>
+      
+      <!-- Panel Symulatora -->
+      <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/95 backdrop-blur-md px-8 py-5 rounded-full shadow-2xl border border-gray-100 z-[1000] w-[85%] max-w-3xl flex items-center gap-6">
+         <div class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center text-xl shadow-sm">⏱️</div>
+         <div class="flex-1">
+            <div class="flex justify-between text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+               <span id="lbl-start">00:00</span>
+               <span class="text-black font-extrabold text-[14px]" id="lbl-current">Czas Symulacji</span>
+               <span id="lbl-end">23:59</span>
+            </div>
+            <input type="range" id="timeSlider" min="0" max="1000" value="0" class="w-full h-2.5 bg-gray-200 rounded-full appearance-none cursor-pointer outline-none" style="accent-color: black;" />
+         </div>
+      </div>
+    </div>
+
+    <div class="space-y-10">
+      <div id="pending-container"></div>
+      <div id="runs-container"></div>
+      
+      <div class="pt-8 border-t border-gray-200">
+         <h2 class="font-extrabold text-[18px] text-gray-400 mb-6 flex items-center gap-3">🗄️ Archiwum Zakończonych Tras</h2>
+         <div id="archive-container" class="opacity-60 grayscale hover:opacity-100 hover:grayscale-0 transition-all"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let map = L.map('map').setView([50.0247, 19.9450], 11);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+       attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+    
+    function getPillMarker(label, dotColor) {
+       return L.divIcon({
+         html: `<div style="background: white; padding: 6px 14px; border-radius: 999px; font-weight: 800; font-size: 13px; color: #111827; box-shadow: 0 8px 20px rgba(0,0,0,0.12); display: flex; align-items: center; gap: 8px; border: 1px solid #f3f4f6; white-space: nowrap; width: max-content;">
+                  <div style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2);"></div>
+                  ${label}
+               </div>`,
+         className: 'leaflet-div-icon', iconSize: [0,0], iconAnchor: [-10, 40]
+       });
+    }
+
+    // Strefy Wykluczenia Transportowego
+    const zoneStyle = { color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.1, weight: 2, dashArray: '5, 5' };
+    L.circle([49.975, 19.828], {radius: 4000, ...zoneStyle}).addTo(map)
+      .bindTooltip("Strefa Wykluczenia<br>Skawina", {permanent: true, direction: 'center', className: 'zone-tooltip'});
+    L.circle([49.983, 20.052], {radius: 4000, ...zoneStyle}).addTo(map)
+      .bindTooltip("Strefa Wykluczenia<br>Wieliczka", {permanent: true, direction: 'center', className: 'zone-tooltip'});
+    L.circle([50.118, 19.938], {radius: 3500, ...zoneStyle}).addTo(map)
+      .bindTooltip("Strefa Wykluczenia<br>Zielonki", {permanent: true, direction: 'center', className: 'zone-tooltip'});
+
+    L.marker([50.0679, 19.9475], {icon: getPillMarker('Baza MDA', '#000000')}).addTo(map);
+
+    const PALETTE = ['#000000', '#2563eb', '#e11d48', '#16a34a', '#8b5cf6', '#ea580c'];
+    let runColors = {};
+    let colorIndex = 0;
+
+    let currentData = { bookings: [], routes: [] };
+    let mapLayers = [];
+    let movingBuses = {};
+    let busBearings = {};
+    let drivenLines = {}; 
+    let globalMinTime = 0, globalMaxTime = 0;
+    let lastDataHash = "";
+    let currentSimTimeMs = 0;
+    
+    let activeRunId = null;
+    let expandedArchives = {}; // track details state
+
+    function toggleBus(runId, e) {
+        if(e) e.stopPropagation();
+        activeRunId = activeRunId === runId ? null : runId;
+        renderMap();
+        renderUI();
+    }
+
+    function getArrowIcon(color, bearing, passCount) {
+       const badgeColor = color === '#000000' ? '#d4ff00' : color;
+       const badgeText = color === '#000000' ? '#000000' : '#ffffff';
+       return L.divIcon({
+          html: `<div style="position:relative; width:36px; height:36px; display:flex; align-items:center;">
+                   <div style="transform: rotate(${bearing}deg); width:36px; height:36px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); background: white; border-radius: 50%; display:flex; justify-content:center; align-items:center; border: 3px solid ${color};">
+                     <svg viewBox="0 0 24 24" fill="${color}" width="20" height="20"><path d="M12 2L22 22L12 17L2 22Z" /></svg>
+                   </div>
+                   <div style="position: absolute; left: 40px; background: ${badgeColor}; color: ${badgeText}; padding: 4px 10px; border-radius: 99px; font-size: 13px; font-weight: 800; border: 2px solid white; white-space: nowrap; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">
+                      👤 ${passCount}
+                   </div>
+                 </div>`,
+          className: 'leaflet-div-icon', iconSize: [36, 36], iconAnchor: [18, 18] 
+       });
+    }
+
+    function updateSimTime() {
+       const sliderVal = document.getElementById('timeSlider').value;
+       if (globalMaxTime > globalMinTime) {
+           currentSimTimeMs = globalMinTime + ((globalMaxTime - globalMinTime) * (sliderVal / 1000));
+       }
+    }
+
+    async function fetchData() {
+      try {
+        const res = await fetch('/api/bookings');
+        const dataText = await res.text();
+        
+        if (dataText === lastDataHash) { simulateBuses(); return; }
+        lastDataHash = dataText;
+        currentData = JSON.parse(dataText);
+        
+        if(currentData.routes && currentData.routes.length > 0) {
+            const validRoutes = currentData.routes.filter(r => r.startTime && r.endTime && r.endTime > r.startTime);
+            if (validRoutes.length > 0) {
+                globalMinTime = Math.min(...validRoutes.map(r => r.startTime));
+                globalMaxTime = Math.max(...validRoutes.map(r => r.endTime));
+            }
+            currentData.routes.forEach(r => {
+                if (!runColors[r.runId]) { runColors[r.runId] = PALETTE[colorIndex % PALETTE.length]; colorIndex++; }
+            });
+        } else {
+            runColors = {}; colorIndex = 0; globalMinTime = 0; globalMaxTime = 0;
+            if(!isSimulating) document.getElementById('timeSlider').value = 0;
+            Object.keys(movingBuses).forEach(k => map.removeLayer(movingBuses[k]));
+            Object.keys(drivenLines).forEach(k => map.removeLayer(drivenLines[k]));
+            movingBuses = {}; drivenLines = {};
+        }
+
+        updateSimTime();
+        renderMap();
+        renderUI();
+      } catch(e) {}
+    }
+
+    function generateCard(b, color = '#111827') {
+      let statusBadge = '';
+      if(b.status === 'offered') statusBadge = '<span class="bg-blue-50 text-blue-700 text-[11px] px-3 py-1 rounded-full font-extrabold border border-blue-100">Wysłano Ofertę</span>';
+      if(b.status === 'scheduled' && !b.scanned) {
+          statusBadge = '<span class="bg-neon text-black text-[11px] px-3 py-1 rounded-full font-extrabold border border-[#c2ed00]">Aktywny</span>';
+      } else if (b.status === 'scheduled' && b.scanned) {
+          statusBadge = '<span class="bg-green-500 text-white text-[11px] px-3 py-1 rounded-full font-extrabold border border-green-600">Skan ✓</span>';
+      }
+      if(b.status === 'rejected') statusBadge = '<span class="bg-gray-100 text-gray-500 text-[11px] px-3 py-1 rounded-full font-extrabold border border-gray-200">Odrzucono</span>';
+      if(b.status === 'no_show') statusBadge = '<span class="bg-red-100 text-red-600 text-[11px] px-3 py-1 rounded-full font-extrabold border border-red-200">No-Show</span>';
+
+      const bookedInfo = (b.simBookedDay && b.simBookedTime) ? `${b.simBookedDay} ${b.simBookedTime}` : '<span class="text-[#d4ff00] bg-black px-1.5 py-0.5 rounded uppercase">Aplikacja 📱</span>';
+      const noShowBtn = (b.status === 'scheduled' && !b.scanned) ? 
+          `<button onclick="reportNoShow('${b.id}', event)" class="mt-2 w-full text-[11px] font-extrabold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 py-2 rounded-[12px] transition-colors shadow-sm">Zgłoś No-Show (Przelicz trasę)</button>` : '';
+      return `
+      <div class="bg-white p-5 rounded-[24px] shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-gray-100 flex flex-col gap-3 transition-transform hover:-translate-y-1">
+         <div class="flex justify-between items-center mb-1">
+            <span class="text-[11px] font-mono text-gray-500 bg-gray-50 px-2 py-1 rounded-md font-bold">#${b.userId.toUpperCase()}</span>
+            ${statusBadge}
+         </div>
+         <div class="bg-gray-50 rounded-xl p-2.5 mb-1 border border-gray-100">
+            <div class="flex justify-between items-center text-[10px] font-extrabold text-gray-400 uppercase tracking-widest mb-1.5">
+               <span>Kupiono: <b class="text-gray-800">${bookedInfo}</b></span>
+               <span>Wyjazd:</span>
+            </div>
+            <div class="flex justify-end">
+               <span class="bg-black text-neon text-[11px] px-2.5 py-0.5 rounded-full font-black shadow-sm">${b.arrivalDate || 'Dziś'} · ${b.arrivalTime || 'ASAP'}</span>
+            </div>
+         </div>
+         <div class="flex items-start gap-3">
+            <div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0 text-sm">📍</div>
+            <div class="text-[13px] font-bold text-gray-900 leading-tight">${b.pickupLocation}</div>
+         </div>
+         <div class="flex items-start gap-3">
+            <div class="w-8 h-8 rounded-full bg-black text-white flex items-center justify-center shrink-0 text-sm">🏁</div>
+            <div class="text-[13px] font-bold text-gray-900 leading-tight">${b.dropoffLocation}</div>
+         </div>
+         <div class="mt-2 pt-3 border-t border-gray-100 flex justify-between items-center text-[11px] font-extrabold text-gray-500 uppercase tracking-wide">
+            <div class="flex items-center gap-2">
+               <span>👤 ${b.passengers} os.</span>
+               ${b.wheelchair ? '<span title="Osoba na wózku" class="text-[14px]">♿</span>' : ''}
+               ${b.purpose ? `<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full ml-1">${b.purpose}</span>` : ''}
+            </div>
+            ${b.price ? `<div class="text-[15px] font-black bg-neon px-3 py-1 rounded-full text-black">${b.price}</div>` : ''}
+         </div>
+         ${b.status === 'pending' ? `<button onclick="window.forceProcess('${b.id}')" class="mt-1 w-full bg-orange-400 text-black hover:bg-orange-500 text-[12px] font-bold py-2.5 rounded-xl transition-colors">⚡ Oblicz i Akceptuj</button>` : ''}
+         ${b.status === 'offered' ? `<button onclick="window.adminAccept('${b.id}')" class="mt-1 w-full bg-black text-white hover:bg-gray-800 text-[12px] font-bold py-2.5 rounded-xl transition-colors">✅ Potwierdź za pasażera</button>` : ''}
+         ${noShowBtn}
+      </div>`;
+    }
+
+    window.adminAccept = async function(id) {
+        try {
+            await fetch(`/api/booking/${id}/accept`, { method: 'POST' });
+            await fetchData();
+        } catch(e) {}
+    };
+
+    window.reportNoShow = async function(id, e) {
+        if (e) e.stopPropagation();
+        try {
+            await fetch(`/api/booking/${id}/no-show`, { method: 'POST' });
+            await fetchData();
+        } catch(e) {}
+    };
+
+    window.forceProcess = async function(id) {
+        try {
+            const currentDayStr = SIM_DAYS && SIM_DAYS[currentDayIdx] ? SIM_DAYS[currentDayIdx] : 'Dzień 1';
+            await fetch('/api/calculate-route', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ currentDayStr: currentDayStr, maxCapacity: parseInt(document.getElementById('cfg-capacity').value) || 10 }) });
+            await fetch(`/api/booking/${id}/accept`, { method: 'POST' });
+            await fetchData();
+        } catch(e) {}
+    };
+
+    function renderUI() {
+       const currentDayStr = SIM_DAYS && SIM_DAYS[currentDayIdx] ? SIM_DAYS[currentDayIdx] : 'Dzień 1';
+       const todayPass = currentData.bookings.filter(b => b.arrivalDate === currentDayStr && b.status !== 'rejected').reduce((sum, b) => sum + b.passengers, 0);
+       const mpkDaily = 961643;
+       
+       if (document.getElementById('stat-passengers')) {
+           // Extrapolacja na całe miasto (np. 15 podobnych węzłów przesiadkowych)
+           const cityWidePass = todayPass * 15;
+           document.getElementById('stat-passengers').innerHTML = `${todayPass} <span class="text-gray-400 font-normal text-[10px] ml-1">(Skala 15 Węzłów: ${cityWidePass})</span>`;
+           document.getElementById('stat-marketshare').innerText = ((cityWidePass / mpkDaily) * 100).toFixed(4) + '%';
+           
+           // Obliczenie łącznego zaoszczędzonego CO2
+           let totalCo2SavedKg = 0;
+           currentData.bookings.filter(b => b.arrivalDate === currentDayStr && (b.status === 'scheduled' || b.status === 'completed' || b.status === 'archived')).forEach(b => {
+               if(b.pickupCoords && b.dropoffCoords) {
+                   const p1 = turf.point([b.pickupCoords.lng, b.pickupCoords.lat]);
+                   const p2 = turf.point([b.dropoffCoords.lng, b.dropoffCoords.lat]);
+                   const distKm = turf.distance(p1, p2) * 1.3;
+                   totalCo2SavedKg += distKm * 0.120; // 120g per km
+               }
+           });
+           
+           if(document.getElementById('stat-co2')) {
+               const cityWideCo2 = totalCo2SavedKg * 15;
+               document.getElementById('stat-co2').innerHTML = `${totalCo2SavedKg.toFixed(1)} <span class="text-green-200 font-normal text-[10px] ml-1">(Skala miasto: ${cityWideCo2.toFixed(1)} kg)</span>`;
+           }
+       }
+
+       const pending = currentData.bookings.filter(b => b.status === 'pending');
+       let pendingHtml = '';
+       if (pending.length > 0) {
+           pendingHtml = `
+           <div class="bg-white rounded-[32px] p-8 shadow-sm border border-gray-100">
+               <h2 class="font-extrabold text-[18px] text-black mb-6 flex items-center gap-3"><span class="w-4 h-4 rounded-full bg-orange-400 animate-pulse"></span>Oczekujące na algorytm</h2>
+               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+                  ${pending.map(b => generateCard(b)).join('')}
+               </div>
+           </div>`;
+       }
+       document.getElementById('pending-container').innerHTML = pendingHtml;
+
+       const runs = {};
+       currentData.bookings.filter(b => b.status !== 'pending' && b.status !== 'rejected').forEach(b => {
+          if (!runs[b.runId]) runs[b.runId] = [];
+          runs[b.runId].push(b);
+       });
+
+       let activeHtml = '';
+       let archiveHtml = '';
+
+       const routesMap = {};
+       currentData.routes.forEach(r => routesMap[r.runId] = r);
+
+       const runKeys = Object.keys(runs).reverse(); // Najnowsze na górze
+       
+       let archiveCount = 0;
+       
+       for (let i = 0; i < runKeys.length; i++) {
+          const runId = runKeys[i];
+          const idx = runKeys.length - 1 - i;
+          
+          const route = routesMap[runId];
+          const isArchived = route && currentSimTimeMs > 0 && currentSimTimeMs >= route.endTime;
+          
+          if (isArchived && archiveCount >= 10) continue; // Pomiń ciężkie operacje dla starych tras
+
+          const arr = runs[runId];
+          const color = runColors[runId] || '#000000';
+          const pass = arr.reduce((s, b) => s + b.passengers, 0);
+          
+          const isHighlighted = activeRunId === runId;
+          const opacityClass = (activeRunId && !isHighlighted) ? 'opacity-40 grayscale' : 'opacity-100';
+          const outlineClass = isHighlighted ? 'ring-4 ring-black scale-[1.01]' : '';
+
+          window.configCapacity = parseInt(document.getElementById('cfg-capacity').value) || 10;
+
+          if (isArchived) {
+             if (archiveCount >= 10) return; // Optymalizacja przeglądarki - renderuj max 10 archiwalnych
+             archiveCount++;
+             const isOpen = expandedArchives[runId] ? 'open' : '';
+             archiveHtml += `
+             <details ${isOpen} ontoggle="if(this.open) window.expandedArchives['${runId}']=true; else delete window.expandedArchives['${runId}'];" class="bg-white rounded-[36px] shadow-sm border border-gray-100 overflow-hidden mb-4 cursor-pointer transition-all group ${opacityClass} ${outlineClass}">
+                <summary class="px-8 py-5 flex items-center justify-between outline-none list-none" style="background-color: ${color}; color: white;">
+                   <h3 class="font-extrabold text-[16px] flex items-center gap-3">
+                      🚐 Flota: Trasa #${idx+1} (ZAKOŃCZONA) 
+                      <span class="text-[12px] font-normal ml-2 opacity-80 group-open:hidden">[Kliknij by rozwinąć]</span>
+                   </h3>
+                   <div class="flex items-center gap-3">
+                      <span class="bg-red-500 text-white text-[12px] px-3 py-1.5 rounded-full font-bold shadow-sm">Koszt trasy: ${route && route.runCost ? route.runCost : '0.00'} PLN</span>
+                      <button type="button" onclick="toggleBus('${runId}', event)" class="bg-black/20 hover:bg-black/40 px-3 py-1.5 rounded-full text-[11px] font-bold">🔍 Mapa</button>
+                      <span class="bg-white text-black text-[12px] px-5 py-2 rounded-full font-black shadow-sm">Zapełnienie: ${pass}/${window.configCapacity}</span>
+                   </div>
+                </summary>
+                <div class="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 bg-[#F8F9FA]">
+                   ${arr.map(b => generateCard(b, color)).join('')}
+                </div>
+             </details>`;
+          } else {
+             activeHtml += `
+             <div class="bg-white rounded-[36px] shadow-lg border border-gray-100 overflow-hidden mb-8 transition-all ${opacityClass} ${outlineClass}">
+                <div class="px-8 py-5 flex items-center justify-between" style="background-color: ${color}; color: white;">
+                   <h3 class="font-extrabold text-[18px] flex items-center gap-3">🚐 Flota: Trasa #${idx+1}</h3>
+                   <div class="flex items-center gap-3">
+                      <span class="bg-red-500 text-white text-[12px] px-3 py-1.5 rounded-full font-bold shadow-sm">Koszt trasy: ${route && route.runCost ? route.runCost : '0.00'} PLN</span>
+                      <button type="button" onclick="toggleBus('${runId}', event)" class="bg-black/20 hover:bg-black/40 px-3 py-1.5 rounded-full text-[12px] font-bold">🔍 Mapa</button>
+                      <span class="bg-white text-black text-[12px] px-5 py-2 rounded-full font-black shadow-sm">Zapełnienie: ${pass}/${window.configCapacity}</span>
+                   </div>
+                </div>
+                <div class="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 bg-[#F8F9FA]">
+                   ${arr.map(b => generateCard(b, color)).join('')}
+                </div>
+             </div>`;
+          }
+       }
+
+       document.getElementById('runs-container').innerHTML = activeHtml;
+       document.getElementById('archive-container').innerHTML = archiveHtml || '<p class="text-sm text-gray-400 font-bold">Brak zarchiwizowanych tras.</p>';
+    }
+
+    function renderMap() {
+      mapLayers.forEach(l => map.removeLayer(l));
+      mapLayers = [];
+      Object.keys(drivenLines).forEach(k => map.removeLayer(drivenLines[k]));
+      drivenLines = {};
+
+      const bounds = L.latLngBounds();
+      bounds.extend([50.0679, 19.9475]);
+
+      const activeForMap = currentData.routes.filter(r => currentSimTimeMs >= r.startTime && currentSimTimeMs < r.endTime);
+      let targetRunId = activeRunId;
+      if (!targetRunId && activeForMap.length > 0) {
+          const youngest = activeForMap.reduce((prev, curr) => (curr.startTime > prev.startTime) ? curr : prev);
+          targetRunId = youngest.runId;
+      }
+
+      currentData.routes.forEach(r => {
+         try {
+             if (r.geojson) {
+                 const isArchived = currentSimTimeMs > 0 && currentSimTimeMs >= (r.endTime + 15 * 60000); // 15 min marginesu
+                 if (isArchived) return; // Oczyszcza bardzo stare trasy
+                 
+                 // Zaznacz wybraną trasę mocniej, a pozostałe delikatniej
+                 const isTarget = targetRunId && r.runId === targetRunId;
+                 const opacity = isTarget ? 0.9 : 0.4;
+                 const weight = isTarget ? 6 : 4;
+                 
+                 const color = runColors[r.runId] || '#000000';
+                 const layer = L.geoJSON(r.geojson, { 
+                    style: { color: color, weight: weight, opacity: opacity, dashArray: '8, 10', lineJoin: 'round', lineCap: 'round' } 
+                 }).addTo(map);
+                 bounds.extend(layer.getBounds());
+                 mapLayers.push(layer);
+             }
+         } catch(e) {}
+      });
+
+      if (targetRunId) {
+          currentData.bookings.forEach(b => {
+             if(b.status === 'rejected' || b.status === 'pending') return;
+             if (b.runId !== targetRunId) return;
+             
+             const route = currentData.routes.find(r => r.runId === b.runId);
+             const isArchived = route && currentSimTimeMs > 0 && currentSimTimeMs >= route.endTime;
+             const isDroppedOff = b.dropoffTimestamp && currentSimTimeMs >= b.dropoffTimestamp;
+             if (isArchived || isDroppedOff) return; // Znikają po zrealizowaniu lub wygaśnięciu trasy
+
+             const color = runColors[b.runId] || '#000000';
+             const dotColor = color === '#000000' ? '#d4ff00' : color;
+
+             if(b.pickupCoords && b.pickupCoords.lat) {
+                let m = L.marker([b.pickupCoords.lat, b.pickupCoords.lng], {icon: getPillMarker('Odbiór', dotColor)}).addTo(map);
+                mapLayers.push(m);
+                bounds.extend([b.pickupCoords.lat, b.pickupCoords.lng]);
+             }
+             
+             if (b.walkDistance && b.originalDropoffCoords && b.dropoffCoords && b.dropoffCoords.lat && b.originalDropoffCoords.lat) {
+                let line = L.polyline([
+                   [b.dropoffCoords.lat, b.dropoffCoords.lng],
+                   [b.originalDropoffCoords.lat, b.originalDropoffCoords.lng]
+                ], {color: '#9ca3af', dashArray: '4, 8', weight: 4, lineJoin: 'round', lineCap: 'round'}).addTo(map);
+                let targetMarker = L.marker([b.originalDropoffCoords.lat, b.originalDropoffCoords.lng], {icon: getPillMarker('Cel', '#9ca3af')}).addTo(map);
+            mapLayers.push(line); mapLayers.push(targetMarker);
+            bounds.extend([b.originalDropoffCoords.lat, b.originalDropoffCoords.lng]);
+         }
+
+         if(b.dropoffCoords && b.dropoffCoords.lat) {
+            let m = L.marker([b.dropoffCoords.lat, b.dropoffCoords.lng], {icon: getPillMarker('Wysiadka', dotColor)}).addTo(map);
+            mapLayers.push(m);
+         }
+      });
+      } // End of activeRunId check
+
+      if (mapLayers.length > 0 && bounds.isValid()) {
+         map.fitBounds(bounds, { padding: [80, 80] });
+      }
+
+      simulateBuses(); 
+    }
+
+    document.getElementById('timeSlider').addEventListener('input', simulateBuses);
+
+    function simulateBuses() {
+       if (!currentData.routes || currentData.routes.length === 0) return;
+       const sliderVal = document.getElementById('timeSlider').value; 
+       if (globalMaxTime <= globalMinTime) return;
+
+       currentSimTimeMs = globalMinTime + ((globalMaxTime - globalMinTime) * (sliderVal / 1000));
+       
+       if (!isSimulating) {
+           const dispDate = new Date(currentSimTimeMs);
+           document.getElementById('lbl-current').innerText = `${String(dispDate.getHours()).padStart(2,'0')}:${String(dispDate.getMinutes()).padStart(2,'0')}`;
+       }
+
+       const activeForMap = currentData.routes.filter(r => currentSimTimeMs >= r.startTime && currentSimTimeMs < r.endTime);
+       let targetRunId = activeRunId;
+       if (!targetRunId && activeForMap.length > 0) {
+           const youngest = activeForMap.reduce((prev, curr) => (curr.startTime > prev.startTime) ? curr : prev);
+           targetRunId = youngest.runId;
+       }
+
+       currentData.routes.forEach(r => {
+          if (!targetRunId || r.runId !== targetRunId) {
+             if (movingBuses[r.runId]) { map.removeLayer(movingBuses[r.runId]); delete movingBuses[r.runId]; }
+             if (drivenLines[r.runId]) { map.removeLayer(drivenLines[r.runId]); delete drivenLines[r.runId]; }
+             return;
+          }
+
+          try {
+              const line = r.geojson;
+              if (!line || line.type !== 'LineString') return;
+              
+              const color = runColors[r.runId] || '#000000';
+              let progress = 0;
+
+              if (currentSimTimeMs < r.startTime) { progress = 0; }
+              else if (currentSimTimeMs >= r.endTime) { progress = 1; }
+              else {
+                 const duration = r.endTime - r.startTime;
+                 progress = duration > 0 ? (currentSimTimeMs - r.startTime) / duration : 1;
+              }
+              
+              if (progress >= 1 || currentSimTimeMs < r.startTime) {
+                 if (movingBuses[r.runId]) { map.removeLayer(movingBuses[r.runId]); delete movingBuses[r.runId]; }
+                 if (drivenLines[r.runId]) { map.removeLayer(drivenLines[r.runId]); delete drivenLines[r.runId]; }
+                 return;
+              }
+
+              const totalLength = turf.length(line, {units: 'kilometers'});
+              const currentDistance = totalLength * progress;
+              const point = turf.along(line, currentDistance, {units: 'kilometers'});
+              const coords = point.geometry.coordinates;
+
+              let bearing = busBearings[r.runId] || 0;
+              if (progress > 0 && progress < 1) {
+                  const pAhead = turf.along(line, Math.min(totalLength, currentDistance + 0.005), {units: 'kilometers'});
+                  const pBehind = turf.along(line, Math.max(0, currentDistance - 0.005), {units: 'kilometers'});
+                  if (pBehind.geometry.coordinates[0] !== pAhead.geometry.coordinates[0] || pBehind.geometry.coordinates[1] !== pAhead.geometry.coordinates[1]) {
+                      bearing = turf.bearing(pBehind, pAhead);
+                      busBearings[r.runId] = bearing;
+                  }
+              }
+
+              let estPass = 0;
+              const runBookings = currentData.bookings.filter(b => b.runId === r.runId);
+              runBookings.forEach(b => {
+                 if (b.status !== 'rejected' && currentSimTimeMs >= b.pickupTimestamp && currentSimTimeMs <= b.dropoffTimestamp) {
+                    estPass += b.passengers;
+                 }
+              });
+
+              if(!movingBuses[r.runId]) {
+                 movingBuses[r.runId] = L.marker([coords[1], coords[0]], {icon: getArrowIcon(color, bearing, estPass), zIndexOffset: 1000}).addTo(map);
+              } else {
+                 movingBuses[r.runId].setLatLng([coords[1], coords[0]]);
+                 movingBuses[r.runId].setIcon(getArrowIcon(color, bearing, estPass));
+              }
+
+              if (progress > 0) {
+                 const startPt = turf.point(line.coordinates[0]);
+                 const sliced = turf.lineSlice(startPt, point, line);
+                 const latLngs = sliced.geometry.coordinates.map(c => [c[1], c[0]]);
+                 if (!drivenLines[r.runId]) {
+                    drivenLines[r.runId] = L.polyline(latLngs, {
+                       color: '#d1d5db', weight: 8, opacity: 1, lineJoin: 'round', lineCap: 'round'
+                    }).addTo(map);
+                 } else {
+                    drivenLines[r.runId].setLatLngs(latLngs);
+                 }
+              } else if (progress === 0 && drivenLines[r.runId]) {
+                 map.removeLayer(drivenLines[r.runId]);
+                 delete drivenLines[r.runId];
+              }
+
+          } catch(e) {}
+       });
+    }
+
+    async function calculateRoutes() {
+      const btn = document.getElementById('calc-btn');
+      btn.innerHTML = 'Obliczanie AI...'; btn.disabled = true;
+      try {
+        const capacity = parseInt(document.getElementById('cfg-capacity').value) || 10;
+        const currentDayStr = SIM_DAYS && SIM_DAYS[currentDayIdx] ? SIM_DAYS[currentDayIdx] : 'Dzień 1';
+
+        await fetch('/api/calculate-route', { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ currentDayStr: currentDayStr, maxCapacity: capacity }) 
+        });
+        await fetchData();
+      } catch(e) {}
+      btn.innerHTML = '<span>⚡</span> Oblicz trasy'; btn.disabled = false;
+    }
+
+    async function clearBookings() {
+      if(confirm('Wyczyścić całą historię?')) {
+        await fetch('/api/bookings', { method: 'DELETE' });
+        lastDataHash = "";
+        fetchData();
+      }
+    }
+
+    function downloadCSV(dayFilter = null) {
+       if(!currentData || !currentData.bookings || currentData.bookings.length === 0) {
+           alert("Brak danych do wygenerowania raportu.");
+           return;
+       }
+       
+       const rows = [ [
+           "Identyfikator Zgłoszenia", "Status Biletu", "Czas Zakupu", "Oczekiwany Wyjazd", 
+           "Miejsce Odbioru", "Miejsce Docelowe", "Liczba Pasażerów", "Cel Podróży", 
+           "Kwota (PLN)", "Zaoszczędzone CO2 (kg)", "Wydłużenie Trasy (%)", "Użyto Wirtualnego Przystanku", "Rzeczywisty Czas Odbioru",
+           "Profil Pasażera", "Rzeczywisty Dystans Dojścia (metry)", "Zaoszczędzony Czas Grupy (minuty)", "Współdzielenie Pojazdu na starcie", "Warunki Pogodowe", "Ocena Przejazdu", "Odzyskany Czas (No-Show min)"
+       ] ];
+       
+       let targetBookings = currentData.bookings;
+       if (dayFilter) targetBookings = targetBookings.filter(b => b.arrivalDate === dayFilter);
+       
+       targetBookings.forEach(b => {
+           let distKm = 0;
+           if(b.pickupCoords && (b.originalDropoffCoords || b.dropoffCoords)) {
+               const p1 = turf.point([b.pickupCoords.lng, b.pickupCoords.lat]);
+               const destCoords = b.originalDropoffCoords || b.dropoffCoords;
+               const p2 = turf.point([destCoords.lng, destCoords.lat]);
+               distKm = parseFloat((turf.distance(p1, p2) * 1.3).toFixed(2));
+           }
+           const savedCo2 = String((distKm * 0.120).toFixed(2)).replace('.', ',');
+           
+           const statusMap = {
+               'pending': 'OCZEKUJĄCY',
+               'offered': 'OFERTA',
+               'scheduled': 'ZAPLANOWANY',
+               'completed': 'ZAKOŃCZONY',
+               'archived': 'ZARCHIWIZOWANY',
+               'rejected': 'ODRZUCONY',
+               'no_show': 'BRAK_PASAZERA'
+           };
+           
+           const ticket_id = b.userId;
+           const ticket_status = statusMap[b.status] || b.status.toUpperCase();
+           const purchase_time = `${b.simBookedDay || "Dzień 1"} ${b.simBookedTime || "-"}`;
+           const requested_departure = b.arrivalTime || "ASAP";
+           const origin_node = `"${b.originalPickupLocation || b.pickupLocation}"`;
+           const destination_node = `"${b.dropoffLocation}"`;
+           const passenger_count = `${b.passengers} OS.`;
+           const trip_purpose = (b.purpose || "BRAK").toUpperCase();
+           
+           let price_pln = "0,00";
+           if (b.price) {
+               price_pln = String(b.price).replace(' PLN', '').replace('.', ',');
+           }
+
+           const detour_ratio_percent = b.detourRatioPercent ? `${b.detourRatioPercent}%` : "0%";
+           const was_virtual_stop_used = (b.virtualStopOffer || b.walkDistance) ? "TAK" : "NIE";
+           const actual_pickup_time = b.pickupEta || "-";
+
+           const profileName = b.profile === 'senior' ? 'Senior' : (b.profile === 'student' ? 'Uczeń' : 'Standard');
+           const walkDistStr = b.walkDistance ? b.walkDistance : "0";
+           const timeSavedStr = b.timeSaved ? b.timeSaved : "0";
+           const occupancyStr = b.occupancyAtBoarding !== undefined ? b.occupancyAtBoarding : "-";
+           const weatherStr = b.weather || "Słońce";
+           const ratingStr = b.rating ? b.rating : "-";
+           const noShowRecoveredStr = b.status === 'no_show' ? "6" : "0";
+
+           rows.push([
+               ticket_id, ticket_status, purchase_time, requested_departure,
+               origin_node, destination_node, passenger_count, trip_purpose,
+               price_pln, savedCo2, detour_ratio_percent, was_virtual_stop_used, actual_pickup_time,
+               profileName, walkDistStr, timeSavedStr, occupancyStr, weatherStr, ratingStr, noShowRecoveredStr
+           ]);
+       });
+
+       if (rows.length <= 1) {
+           console.log("Brak zrealizowanych przejazdów dla CSV.");
+           return;
+       }
+
+       const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + rows.map(e => e.join(";")).join("\n");
+       const encodedUri = encodeURI(csvContent);
+       const link = document.createElement("a");
+       link.setAttribute("href", encodedUri);
+       link.setAttribute("download", `smartlink_raport_${dayFilter ? dayFilter.replace(' ','') : 'pelny'}_${new Date().getTime()}.csv`);
+       document.body.appendChild(link);
+       link.click();
+       document.body.removeChild(link);
+    }
+
+    let simInterval = null;
+    let isSimulating = false;
+    let simTicks = 0;
+    const TICKS_PER_DAY = 100; // 300ms per tick = 30 seconds per day -> 90s total! Faster!
+    let SIM_DAYS = ['Dzień 1', 'Dzień 2', 'Dzień 3'];
+    let currentDayIdx = 0;
+
+    function openSimModal() {
+        if(isSimulating) { toggleSimulationState(); return; } // just stop if running
+        document.getElementById('sim-modal').classList.replace('hidden', 'flex');
+    }
+
+    async function startSimulation() {
+        document.getElementById('sim-modal').classList.replace('flex', 'hidden');
+        await fetch('/api/bookings', { method: 'DELETE' });
+        currentDayIdx = 0;
+        simTicks = 0;
+        document.getElementById('timeSlider').value = 0;
+        const totalDays = parseInt(document.getElementById('cfg-days').value) || 3;
+        SIM_DAYS = Array.from({length: Math.min(totalDays, 30)}, (_, i) => `Dzień ${i+1}`);
+        toggleSimulationState();
+    }
+
+    function toggleSimulationState() {
+      isSimulating = !isSimulating;
+      const btn = document.getElementById('sim-btn');
+      if (isSimulating) {
+         btn.innerHTML = `🛑 Zatrzymaj Symulację`;
+         btn.classList.add('bg-red-500', 'text-white');
+         btn.classList.remove('bg-black');
+         
+         const cap = parseInt(document.getElementById('cfg-capacity').value) || 10;
+         const baseSpawnRate = (parseInt(document.getElementById('cfg-spawn').value) || 40) / 100;
+         
+         document.getElementById('sim-day-lbl').innerText = `Symulacja Dnia: ${SIM_DAYS[currentDayIdx]}`;
+
+         simInterval = setInterval(async () => {
+             simTicks++;
+             const progress = (simTicks / TICKS_PER_DAY) * 1000;
+             document.getElementById('timeSlider').value = progress;
+             
+             const simHour = Math.floor((simTicks / TICKS_PER_DAY) * 24);
+             const simMin = Math.floor(((simTicks / TICKS_PER_DAY) * 24 * 60) % 60);
+             document.getElementById('lbl-current').innerText = `${String(simHour).padStart(2,'0')}:${String(simMin).padStart(2,'0')}`;
+             
+             simulateBuses();
+             renderUI();
+
+             if (simTicks >= TICKS_PER_DAY) {
+                 // END OF CURRENT DAY
+                 currentDayIdx++;
+                 
+                 if (currentDayIdx >= SIM_DAYS.length) {
+                     // END OF FULL SIMULATION
+                     toggleSimulationState();
+                     alert("Zakończono pełną symulację! Generowanie pliku CSV dla wszystkich dni...");
+                     downloadCSV(null); // Generate one file for everything
+                     return;
+                 } else {
+                     simTicks = 0;
+                     document.getElementById('timeSlider').value = 0;
+                     document.getElementById('sim-day-lbl').innerText = `Symulacja Dnia: ${SIM_DAYS[currentDayIdx]}`;
+                 }
+             }
+
+             const currentDayStr = SIM_DAYS[currentDayIdx];
+
+             // Realistyczne Szczyty Komunikacyjne (Rush Hours)
+             // Znacznie wyższy ruch (zwiększone skalowanie)
+             let currentSpawnRate = baseSpawnRate * 80; 
+             if ((simHour >= 7 && simHour <= 9) || (simHour >= 15 && simHour <= 17)) {
+                 currentSpawnRate *= 3.0; // Bardzo mocny szczyt
+             } else if (simHour < 6 || simHour > 21) {
+                 currentSpawnRate *= 0.3; // Spadek w nocy, ale wciąż ruch jest
+             }
+
+             let spawnsThisTick = Math.floor(currentSpawnRate);
+             if (Math.random() < (currentSpawnRate % 1)) spawnsThisTick++;
+
+             // Generowanie pasażerów z uwzględnieniem szczytów i wysokiego wolumenu
+             for (let i = 0; i < spawnsThisTick; i++) {
+                 const locs = [
+                    { lat: 50.061, lng: 19.937, a: "Rynek Główny" }, { lat: 50.068, lng: 19.991, a: "TAURON Arena" },
+                    { lat: 50.054, lng: 19.935, a: "Wawel" }, { lat: 50.051, lng: 19.945, a: "Kazimierz" },
+                    { lat: 50.065, lng: 19.917, a: "AGH" }, { lat: 50.043, lng: 19.935, a: "Forum" },
+                    { lat: 50.072, lng: 20.038, a: "Plac Centralny (NH)" }, { lat: 50.007, lng: 19.944, a: "Kurdwanów" },
+                    { lat: 50.088, lng: 19.890, a: "Rondo Ofiar Katynia" }, { lat: 50.027, lng: 19.900, a: "Kampus UJ (Ruczaj)" },
+                    { lat: 50.104, lng: 19.948, a: "Górka Narodowa" }, { lat: 50.015, lng: 20.017, a: "Bieżanów" },
+                    { lat: 50.100, lng: 20.000, a: "Mistrzejowice" }, { lat: 50.077, lng: 19.784, a: "Lotnisko Balice" },
+                    
+                    // Strefy Wykluczenia Transportowego (Zwiększona waga! 4x)
+                    { lat: 49.975, lng: 19.828, a: "Skawina (Strefa W.)" }, { lat: 49.975, lng: 19.828, a: "Skawina (Strefa W.)" }, { lat: 49.975, lng: 19.828, a: "Skawina (Strefa W.)" }, { lat: 49.975, lng: 19.828, a: "Skawina (Strefa W.)" },
+                    { lat: 49.983, lng: 20.052, a: "Wieliczka (Strefa W.)" }, { lat: 49.983, lng: 20.052, a: "Wieliczka (Strefa W.)" }, { lat: 49.983, lng: 20.052, a: "Wieliczka (Strefa W.)" }, { lat: 49.983, lng: 20.052, a: "Wieliczka (Strefa W.)" },
+                    { lat: 50.118, lng: 19.938, a: "Zielonki (Strefa W.)" }, { lat: 50.118, lng: 19.938, a: "Zielonki (Strefa W.)" }, { lat: 50.118, lng: 19.938, a: "Zielonki (Strefa W.)" }, { lat: 50.118, lng: 19.938, a: "Zielonki (Strefa W.)" },
+
+                    { lat: 50.116, lng: 19.794, a: "Zabierzów" },
+                    { lat: 50.033, lng: 20.216, a: "Niepołomice" }, { lat: 49.936, lng: 19.889, a: "Mogilany" },
+                    { lat: 50.134, lng: 20.045, a: "Michałowice" }, { lat: 50.112, lng: 19.866, a: "Modlniczka" },
+                    { lat: 50.052, lng: 19.845, a: "Bielany" }, { lat: 50.039, lng: 19.972, a: "Płaszów" }
+                 ];
+                 let p1 = locs[Math.floor(Math.random()*locs.length)];
+                 let p2 = locs[Math.floor(Math.random()*locs.length)];
+                 while(p1===p2) p2 = locs[Math.floor(Math.random()*locs.length)];
+                 
+                 // Add massive random geographic offset (jitter up to ~2-3km) for total randomness
+                 const jitter = () => (Math.random() - 0.5) * 0.025;
+                 const finalP1 = { lat: p1.lat + jitter(), lng: p1.lng + jitter(), a: p1.a };
+                 const finalP2 = { lat: p2.lat + jitter(), lng: p2.lng + jitter(), a: p2.a };
+                 
+                 // Randomize if passenger books for Today, Tomorrow or Day After. (Weights heavily to current day)
+                 let bookDay = currentDayStr;
+                 if (Math.random() > 0.6 && currentDayIdx < SIM_DAYS.length - 1) {
+                     // Book for a future day randomly chosen, max 2 days ahead
+                     const futureDaysLeft = Math.min(2, SIM_DAYS.length - 1 - currentDayIdx);
+                     const randomFutureOffset = Math.floor(Math.random() * futureDaysLeft) + 1;
+                     bookDay = SIM_DAYS[currentDayIdx + randomFutureOffset];
+                 }
+                 
+                 // Generate random specific time, ensuring it's not in the past if booked for today
+                 const pad = n => String(n).padStart(2, '0');
+                 let aTime = "ASAP";
+                 let randomMin = [0, 15, 30, 45][Math.floor(Math.random() * 4)];
+                 
+                 if (bookDay === currentDayStr) {
+                     if (Math.random() > 0.4) {
+                         let futureHour = simHour + 1 + Math.floor(Math.random() * (22 - simHour));
+                         if (futureHour <= 22) {
+                             aTime = `${pad(futureHour)}:${pad(randomMin)}`;
+                         }
+                     }
+                 } else {
+                     let randomHour = Math.floor(Math.random() * 14) + 6; // 6 to 19
+                     aTime = `${pad(randomHour)}:${pad(randomMin)}`;
+                 }
+                 
+                 let purpose = "Inne";
+                 const targetHour = aTime === "ASAP" ? simHour : parseInt(aTime.split(':')[0]);
+                 if (targetHour >= 6 && targetHour <= 8) {
+                     const rnd = Math.random();
+                     if (rnd < 0.4) purpose = "🎒 Szkoła";
+                     else if (rnd < 0.8) purpose = "💼 Praca";
+                     else purpose = "🎓 Uczelnia";
+                 } else if (targetHour >= 14 && targetHour <= 16) {
+                     const rnd = Math.random();
+                     if (rnd < 0.4) purpose = "🏠 Powrót ze Szkoły";
+                     else if (rnd < 0.8) purpose = "🏠 Powrót z Pracy";
+                     else purpose = "🏠 Powrót z Uczelni";
+                 } else {
+                     const rnd = Math.random();
+                     if (rnd < 0.3) purpose = "🛒 Zakupy";
+                     else if (rnd < 0.5) purpose = "🏥 Lekarz";
+                     else purpose = "🌆 Czas Wolny";
+                 }
+                 
+                 let profile = "adult";
+                 const profRand = Math.random();
+                 if (profRand < 0.2) profile = "senior";
+                 else if (profRand < 0.4) profile = "student";
+
+                 if (purpose.includes("Szkoła") || purpose.includes("Uczelnia")) profile = "student";
+                 if (purpose.includes("Lekarz")) profile = "senior";
+
+                 const wRand = Math.random();
+                 let weather = 'Słońce';
+                 if (wRand < 0.2) weather = 'Deszcz';
+                 else if (wRand < 0.3) weather = 'Śnieg';
+
+                 const payload = {
+                     userId: 'SIM-'+Math.floor(Math.random()*90000 + 10000), 
+                     pickupLocation: finalP1.a, pickupCoords: {lat: finalP1.lat, lng: finalP1.lng}, 
+                     dropoffLocation: finalP2.a, dropoffCoords: {lat: finalP2.lat, lng: finalP2.lng}, 
+                     passengers: Math.floor(Math.random()*3)+1, 
+                     arrivalDate: bookDay, 
+                     arrivalTime: aTime,
+                     wheelchair: profile === "senior" ? Math.random() < 0.1 : false,
+                     purpose: purpose,
+                     profile: profile,
+                     weather: weather,
+                     simBookedDay: currentDayStr,
+                     simBookedTime: `${pad(simHour)}:${pad(simMin)}`
+                 };
+
+                 fetch('/api/book-ride', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+             }
+
+             const maxFleet = parseInt(document.getElementById('cfg-fleet').value) || 50;
+             const activeRoutesCount = currentData.routes ? currentData.routes.filter(r => currentSimTimeMs >= r.startTime && currentSimTimeMs < r.endTime).length : 0;
+             const availableBuses = Math.max(0, maxFleet - activeRoutesCount);
+
+             // Czekaj na max pojemnosc autobusu na DZIŚ
+             const pendingForToday = currentData.bookings.filter(b => b.status === 'pending' && b.arrivalDate === currentDayStr);
+             const pendingPass = pendingForToday.reduce((sum, b) => sum + b.passengers, 0);
+             
+             if (!window.isCalculating && availableBuses > 0 && (pendingPass >= cap || (pendingPass > 0 && Math.random() < 0.20))) {
+                 window.isCalculating = true;
+                 try {
+                     await fetch('/api/calculate-route', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ currentDayStr: currentDayStr, maxCapacity: cap, maxDispatch: availableBuses }) });
+                 } finally {
+                     window.isCalculating = false;
+                 }
+             }
+             
+             // Auto akceptacja ofert
+             if (currentData && currentData.bookings) {
+                 currentData.bookings.filter(b => b.status === 'offered').forEach(b => {
+                     fetch(`/api/booking/${b.id}/accept`, { method: 'POST' });
+                 });
+             }
+             fetchData();
+         }, 300); // 300ms * 100 ticks = 30 sekund na pełen dzień
+      } else {
+         btn.innerHTML = '🤖 Symulacja (3 Dni)';
+         btn.classList.remove('bg-red-500');
+         btn.classList.add('bg-black', 'text-white');
+         document.getElementById('sim-day-lbl').innerText = `Baza MDA Kraków`;
+         clearInterval(simInterval);
+      }
+    }
+
+    fetchData();
+    setInterval(fetchData, 3000);
+  </script>
+</body>
+</html>
